@@ -1,0 +1,67 @@
+name: Testar e publicar ERP Senembi
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'release-version.txt'
+      - 'app.py'
+      - 'core.py'
+      - 'backup.py'
+      - 'updater.py'
+      - 'assets/**'
+      - '.github/workflows/windows-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: senembi-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Versão
+        shell: pwsh
+        run: |
+          $v = (Get-Content release-version.txt | Select-Object -First 1).Trim()
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw 'Versão inválida' }
+          "RELEASE_VERSION=$v" >> $env:GITHUB_ENV
+          $config = @{ version = $v } | ConvertTo-Json -Compress
+          Set-Content -Path assets/update_config.json -Value $config -Encoding utf8
+      - name: Dependências
+        run: python -m pip install -r requirements.txt
+      - name: Testes
+        run: python -m unittest discover -s tests -v
+      - name: Compilar EXE
+        run: >-
+          python -m PyInstaller --noconfirm --clean --onefile --windowed
+          --name ERP_Senembi --icon assets\senembi.ico
+          --add-data "assets\logo.png;assets"
+          --add-data "assets\update_config.json;assets" app.py
+      - name: Manifesto SHA-256
+        run: python make_manifest.py
+      - name: Disponibilizar executável
+        uses: actions/upload-artifact@v4
+        with:
+          name: ERP_Senembi_Windows
+          path: dist/ERP_Senembi.exe
+      - name: Publicar release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "v$env:RELEASE_VERSION"
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag dist/ERP_Senembi.exe dist/update.json --clobber --repo $env:GITHUB_REPOSITORY
+          } else {
+            gh release create $tag dist/ERP_Senembi.exe dist/update.json --repo $env:GITHUB_REPOSITORY --latest --title "ERP Senembi $tag" --notes "Aplicativo Windows offline."
+          }
