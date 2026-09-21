@@ -1,58 +1,67 @@
-name: Testar e publicar ERP Senembi
+name: Compilar e publicar ERP Senembi
 
 on:
+  push:
+    branches: [main]
+    paths: [release-version.txt]
   workflow_dispatch:
+    inputs:
+      versao:
+        description: 'Número da versão (ex.: 1.0.1)'
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 concurrency:
-  group: senembi-release
+  group: publicar-erp-senembi
   cancel-in-progress: false
 
 jobs:
-  build:
+  publicar:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - name: Versão
+      - name: Selecionar versão
         shell: pwsh
+        env:
+          INPUT_VERSION: ${{ inputs.versao }}
         run: |
-          $v = (Get-Content release-version.txt | Select-Object -First 1).Trim()
-          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw 'Versão inválida' }
-          "RELEASE_VERSION=$v" >> $env:GITHUB_ENV
-          $config = @{ version = $v } | ConvertTo-Json -Compress
-          Set-Content -Path assets/update_config.json -Value $config -Encoding utf8
-      - name: Dependências
+          $version = if ($env:GITHUB_EVENT_NAME -eq 'push') {
+            (Get-Content release-version.txt | Select-Object -First 1).Trim()
+          } else {
+            $env:INPUT_VERSION
+          }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Use uma versão como 1.0.1.' }
+          "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
+      - name: Configurar versão da atualização
+        run: python configurar_release.py $env:GITHUB_REPOSITORY $env:RELEASE_VERSION
+      - name: Instalar dependências
         run: python -m pip install -r requirements.txt
-      - name: Testes
+      - name: Testar versão
         run: python -m unittest discover -s tests -v
-      - name: Compilar EXE
+      - name: Compilar EXE para Windows
         run: >-
           python -m PyInstaller --noconfirm --clean --onefile --windowed
           --name ERP_Senembi --icon assets\senembi.ico
           --add-data "assets\logo.png;assets"
           --add-data "assets\icon.png;assets"
           --add-data "assets\update_config.json;assets" app.py
-      - name: Manifesto SHA-256
+      - name: Gerar arquivo de verificação
         run: python make_manifest.py
       - name: Disponibilizar executável
         uses: actions/upload-artifact@v4
         with:
           name: ERP_Senembi_Windows
           path: dist/ERP_Senembi.exe
-      - name: Publicar release
+      - name: Publicar versão
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $tag = "v$env:RELEASE_VERSION"
-          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag dist/ERP_Senembi.exe dist/update.json --clobber --repo $env:GITHUB_REPOSITORY
-          } else {
-            gh release create $tag dist/ERP_Senembi.exe dist/update.json --repo $env:GITHUB_REPOSITORY --latest --title "ERP Senembi $tag" --notes "Aplicativo Windows offline."
-          }
+          gh release create $tag dist/ERP_Senembi.exe dist/update.json --repo $env:GITHUB_REPOSITORY --latest --title "ERP Senembi $tag" --notes "Atualização do ERP Senembi."
