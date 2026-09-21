@@ -54,7 +54,7 @@ jobs:
       - name: Gerar arquivo de verificação
         run: python make_manifest.py
       - name: Disponibilizar executável
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ERP_Senembi_Windows
           path: dist/ERP_Senembi.exe

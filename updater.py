@@ -32,8 +32,14 @@ def safe_url(url):
     allowed = ('github.com', 'objects.githubusercontent.com', 'release-assets.githubusercontent.com')
     if parts.scheme != 'https' or parts.hostname not in allowed:
         raise ValueError('O download deve vir do release do GitHub por HTTPS.')
-    if parts.hostname == 'github.com' and not parts.path.startswith('/'+REPO+'/releases/download/'):
-        raise ValueError('Endereço fora do repositório Senembi.')
+    if parts.hostname == 'github.com':
+        prefix = '/'+REPO+'/releases/'
+        latest_manifest = prefix+'latest/download/update.json'
+        versioned_asset = re.fullmatch(
+            re.escape(prefix)+r'download/v\d+\.\d+\.\d+/(?:update\.json|ERP_Senembi\.exe)',
+            parts.path)
+        if parts.path != latest_manifest and not versioned_asset:
+            raise ValueError('Endereço fora do repositório Senembi.')
     return url
 
 
@@ -64,8 +70,7 @@ def check_and_stage(config, folder, opener=urllib.request.urlopen):
     if not getattr(sys, 'frozen', False): return None
     manifest_url = f'https://github.com/{REPO}/releases/latest/download/update.json'
     with opener(safe_url(manifest_url), timeout=15) as response:
-        if response.geturl().startswith('https://github.com/'):
-            safe_url(response.geturl())
+        safe_url(response.geturl())
         raw = response.read(65537)
     if len(raw) > 65536: raise ValueError('Manifesto muito grande.')
     manifest = json.loads(raw)
@@ -85,8 +90,7 @@ def check_and_stage(config, folder, opener=urllib.request.urlopen):
     count = 0
     try:
         with os.fdopen(fd, 'wb') as out, opener(url, timeout=45) as response:
-            if response.geturl().startswith('https://github.com/'):
-                safe_url(response.geturl())
+            safe_url(response.geturl())
             while chunk := response.read(1024*1024):
                 count += len(chunk)
                 if count > size: raise ValueError('Tamanho incorreto do EXE.')
