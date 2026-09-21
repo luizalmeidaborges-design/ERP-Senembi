@@ -6,6 +6,7 @@ import os
 import shutil
 import sqlite3
 import tempfile
+from contextlib import closing
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -45,9 +46,10 @@ class Backup:
         fd, temp = tempfile.mkstemp(prefix='.senembi-', suffix='.db', dir=local_dir)
         os.close(fd)
         try:
-            with sqlite3.connect(source, timeout=20) as original, sqlite3.connect(temp) as target:
-                original.backup(target)
-            with sqlite3.connect(temp) as check:
+            with closing(sqlite3.connect(source, timeout=20)) as original:
+                with closing(sqlite3.connect(temp, timeout=20)) as target:
+                    original.backup(target)
+            with closing(sqlite3.connect(temp)) as check:
                 if check.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
                     raise ValueError('A cópia não passou na verificação de integridade.')
             os.replace(temp, local)
