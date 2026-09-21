@@ -13,7 +13,7 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter import font as tkfont
 
 from backup import Backup
-from core import (DEFAULT_RATES, Store, amount, data_dir, display_date,
+from core import (DEFAULT_RATES, Store, add_product_cost, amount, data_dir, display_date,
                   electronic_quote, energy_cost, iso_date, money, number, print_quote)
 from updater import check_and_stage, launch_cached, read_config
 
@@ -400,18 +400,34 @@ class ERP:
 
     def multi_select(self, parent, label, records, selected=None):
         box = field_box(parent, label)
-        lst = tk.Listbox(box, selectmode='multiple', exportselection=False,
-                         height=min(7, max(3, len(records))), font=('Segoe UI', 10),
-                         bg=FIELD, fg=INK, selectbackground=GREEN, selectforeground='white',
-                         relief='flat', bd=0, activestyle='none', highlightthickness=1,
-                         highlightbackground=BORDER, highlightcolor=GREEN)
-        lst.pack(fill='x', ipady=6, ipadx=8)
+        panel = tk.Frame(box, bg=FIELD, highlightthickness=1, highlightbackground=BORDER)
+        panel.pack(fill='x')
+        viewport = tk.Canvas(panel, bg=FIELD, highlightthickness=0,
+                             height=min(7, max(1, len(records))) * 33 + 6)
+        viewport.pack(side='left', fill='both', expand=True)
+        if len(records) > 7:
+            scrollbar = ttk.Scrollbar(panel, orient='vertical', command=viewport.yview)
+            scrollbar.pack(side='right', fill='y')
+            viewport.configure(yscrollcommand=scrollbar.set)
+        rows = tk.Frame(viewport, bg=FIELD)
+        window = viewport.create_window((0, 0), window=rows, anchor='nw')
+        rows.bind('<Configure>', lambda e: viewport.configure(scrollregion=viewport.bbox('all')))
+        viewport.bind('<Configure>', lambda e: viewport.itemconfigure(window, width=e.width))
         form_place(parent, box, span=2)
         selected = set(selected or [])
-        for i, r in enumerate(records):
-            lst.insert('end', f'{r["code"]} · {r["name"]}')
-            if r['id'] in selected: lst.selection_set(i)
-        return lambda: [records[i] for i in lst.curselection()]
+        checks = []
+        for record in records:
+            checked = tk.BooleanVar(value=record['id'] in selected)
+            tk.Checkbutton(rows, text=f'{record["code"]} · {record["name"]}',
+                           variable=checked, bg=FIELD, fg=INK, selectcolor=FIELD,
+                           activebackground=FIELD, activeforeground=DARK,
+                           anchor='w', relief='flat', bd=0, padx=10, pady=5,
+                           cursor='hand2', font=('Segoe UI', 10)).pack(fill='x')
+            checks.append(checked)
+        if not records:
+            tk.Label(rows, text='Nenhum item cadastrado.', bg=FIELD, fg='#60776b',
+                     anchor='w', padx=12, pady=8).pack(fill='x')
+        return lambda: [record for record, checked in zip(records, checks) if checked.get()]
 
     def product(self, old=None):
         d = Dialog(self, 'Produto' + (f' · {old["code"]}' if old else ''), height=780)
@@ -433,28 +449,33 @@ class ERP:
             mode = kind.get()
             if mode == 'Impresso':
                 filaments = self.store.all('filaments')
-                state['selected'] = self.multi_select(detail, 'Filamentos possíveis (Ctrl+clique)', filaments, get('filament_ids', []))
+                state['selected'] = self.multi_select(detail, 'Filamentos possíveis', filaments, get('filament_ids', []))
                 state['weight'] = entry(detail, 'Peso de filamento por unidade (g)', get('weight_g', '0'))
                 state['hours'] = entry(detail, 'Tempo de impressão por unidade (h)', get('print_hours', '0'))
                 state['labor_hours'] = entry(detail, 'Horas de modelagem por unidade', get('labor_hours', '0'))
                 state['hour_rate'] = entry(detail, 'Hora de modelagem (R$/h)', get('hour_rate', self.store.setting('modeling_hour')))
             elif mode == 'Eletrônico':
                 parts = self.store.all('components')
-                state['parts'] = self.multi_select(detail, 'Componentes (Ctrl+clique)', parts, [x['id'] for x in get('parts', [])])
+                state['parts'] = self.multi_select(detail, 'Componentes', parts, [x['id'] for x in get('parts', [])])
                 state['quantities'] = entry(detail, 'Quantidades na ordem acima (ex.: 2,1,4)',
                                             ','.join(str(x['qty']) for x in get('parts', [])))
                 state['hours'] = entry(detail, 'Tempo de preparo (h)', get('prep_hours', '0'))
                 state['hour_rate'] = entry(detail, 'Hora técnica (R$/h)', get('hour_rate', self.store.setting('electronics_hour')))
             else:
                 products = [r for r in self.store.all('products') if r['type'] in ('Impresso', 'Eletrônico') and r['id'] != get('id')]
-                state['selected'] = self.multi_select(detail, 'Produtos impressos e eletrônicos do conjunto (Ctrl+clique)',
+                state['selected'] = self.multi_select(detail, 'Produtos impressos e eletrônicos do conjunto',
                                                        products, get('product_ids', []))
                 state['hours'] = entry(detail, 'Horas de montagem/integração', get('assembly_hours', '0'))
                 state['hour_rate'] = entry(detail, 'Hora técnica (R$/h)', get('hour_rate', self.store.setting('technical_hour')))
             form_note(detail, 'O orçamento é recalculado ao salvar. '
-                      'Custo = materiais + energia + trabalho; preço = custo × (1 + lucro/100).')
+                      'Custo = materiais + energia + trabalho + custo adicional; '
+                      'preço = custo × (1 + lucro/100).')
         kind.trace_add('write', draw)
         draw()
+        form_section(d.content, 'Itens adicionais')
+        additional_items = entry(d.content, 'Descrição (bucha, parafuso...)', get('additional_items'))
+        additional_cost = entry(d.content, 'Custo adicional por unidade (R$)',
+                                get('additional_cost', '0'))
         def save():
             m = number(margin.get(), 'Lucro')
             mode = kind.get()
@@ -484,7 +505,9 @@ class ERP:
                          'cost': amount(cost), 'sale': amount(cost * (1+m/100))}
                 payload.update(product_ids=[i['id'] for i in items], assembly_hours=float(number(state['hours'].get())),
                                hour_rate=float(number(state['hour_rate'].get())))
-            payload.update(quote)
+            payload.update(additional_items=additional_items.get().strip(),
+                           additional_cost=float(number(additional_cost.get(), 'Custo adicional')))
+            payload.update(add_product_cost(quote, additional_cost.get(), m))
             self.store.save('products', name.get(), payload, id_=get('id') or None)
         d.save_button(save)
 
@@ -496,7 +519,7 @@ class ERP:
         due = entry(d.content, 'Entrega (DD/MM/AAAA)', display_date(get('due')))
         form_section(d.content, 'Produtos do pedido')
         products = self.store.all('products')
-        selected = self.multi_select(d.content, 'Produtos (Ctrl+clique)', products, [x['id'] for x in get('items', [])])
+        selected = self.multi_select(d.content, 'Produtos', products, [x['id'] for x in get('items', [])])
         qty = entry(d.content, 'Quantidades na ordem acima (ex.: 2,1)',
                     ','.join(str(x['qty']) for x in get('items', [])), span=2)
         form_section(d.content, 'Acompanhamento e cobrança')

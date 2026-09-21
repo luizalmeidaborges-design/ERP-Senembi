@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from backup import Backup
-from core import Store, electronic_quote, energy_cost, filament_prefix, print_quote
+from core import Store, add_product_cost, electronic_quote, energy_cost, filament_prefix, print_quote
 
 
 class ERPTests(unittest.TestCase):
@@ -32,6 +32,22 @@ class ERPTests(unittest.TestCase):
             store.remove(project)
             self.assertEqual(store.tasks(), [])
             store.db.close()
+
+    def test_additional_items_are_charged_in_printed_and_electronic_products(self):
+        filament = [dict(code='PLA-PRE-00001', reel_g=1000, value=100)]
+        printed = print_quote(filament, 50, 0, 1, 350, 30)
+        self.assertEqual((printed['cost'], printed['sale']), (5, 6.5))
+        printed = add_product_cost(printed, '2,50', 30)
+        self.assertEqual((printed['material'], printed['cost'], printed['sale']),
+                         (7.5, 7.5, 9.75))
+
+        component = dict(quantity=2, package_value=10)
+        electronic = electronic_quote([(component, 1)], 1, 100, 20)
+        electronic = add_product_cost(electronic, 3, 20)
+        self.assertEqual((electronic['material'], electronic['cost'], electronic['sale']),
+                         (8, 108, 129.6))
+        with self.assertRaises(ValueError):
+            add_product_cost(printed, '-1', 30)
 
     def test_backup_and_sequential_codes(self):
         with tempfile.TemporaryDirectory() as temp:

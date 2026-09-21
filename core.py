@@ -110,6 +110,17 @@ def electronic_quote(parts, prep_hours, hour_rate, profit):
             'cost': amount(cost), 'sale': amount(cost * (1 + number(profit, 'Lucro (%)') / 100))}
 
 
+def add_product_cost(quote, extra, profit):
+    """Inclui materiais avulsos no custo unitário antes de aplicar o lucro."""
+    extra = number(extra, 'Custo adicional')
+    result = dict(quote)
+    result['material'] = amount(Decimal(str(result['material'])) + extra)
+    result['cost'] = amount(Decimal(str(result['cost'])) + extra)
+    result['sale'] = amount(Decimal(str(result['cost'])) *
+                            (1 + number(profit, 'Lucro (%)') / 100))
+    return result
+
+
 def data_dir():
     path = Path(os.environ.get('LOCALAPPDATA') or Path.home() / '.local' / 'share') / 'Senembi' / 'ERP'
     path.mkdir(parents=True, exist_ok=True)
