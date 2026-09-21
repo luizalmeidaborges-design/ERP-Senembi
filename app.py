@@ -11,6 +11,7 @@ import tkinter as tk
 from datetime import date
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
+from tkinter import font as tkfont
 
 from backup import Backup
 from core import (DEFAULT_RATES, Store, amount, data_dir, display_date,
@@ -28,6 +29,57 @@ KINDS = {'Impresso': 'printed', 'Eletrônico': 'electronic', 'Mecatrônico': 'me
 def resource(filename):
     root = Path(getattr(sys, '_MEIPASS', Path(__file__).resolve().parent))
     return root / 'assets' / filename
+
+
+class ActionButton(tk.Canvas):
+    """Botão de ação com cantos arredondados, estados de foco e hover."""
+    COLORS = {
+        'primary': (GREEN, '#1a704c', '#14583d', '#ffffff'),
+        'secondary': ('#deeee6', '#c7e4d4', '#afd6c1', DARK),
+        'danger': ('#fce9e5', '#f6d2cc', '#ebbbb3', '#963d35'),
+    }
+
+    def __init__(self, parent, text, command, variant='secondary', background=BG):
+        self.face, self.hover, self.pressed, self.ink = self.COLORS[variant]
+        self.command = command
+        self.label = text
+        self.text_font = tkfont.Font(family='Segoe UI', size=10, weight='bold')
+        width = max(48, self.text_font.measure(text) + 34)
+        super().__init__(parent, width=width, height=38, bg=background,
+                         highlightthickness=0, bd=0, cursor='hand2', takefocus=1)
+        self._state = 'normal'
+        self.bind('<Enter>', lambda e: self._set_state('hover'))
+        self.bind('<Leave>', lambda e: self._set_state('normal'))
+        self.bind('<ButtonPress-1>', lambda e: (self.focus_set(), self._set_state('pressed')))
+        self.bind('<ButtonRelease-1>', self._release)
+        self.bind('<Return>', lambda e: self.command())
+        self.bind('<space>', lambda e: self.command())
+        self.bind('<FocusIn>', lambda e: self._draw())
+        self.bind('<FocusOut>', lambda e: self._draw())
+        self._draw()
+
+    def _set_state(self, state):
+        self._state = state
+        self._draw()
+
+    def _release(self, event):
+        inside = 0 <= event.x < self.winfo_width() and 0 <= event.y < self.winfo_height()
+        self._set_state('hover' if inside else 'normal')
+        if inside:
+            self.command()
+
+    def _draw(self):
+        self.delete('all')
+        w, h, r = int(self['width']), int(self['height']), 11
+        fill = {'normal': self.face, 'hover': self.hover, 'pressed': self.pressed}[self._state]
+        self.create_rectangle(r, 1, w-r, h-1, fill=fill, outline='')
+        self.create_rectangle(1, r, w-1, h-r, fill=fill, outline='')
+        for x in (1, w-2*r-1):
+            for y in (1, h-2*r-1):
+                self.create_oval(x, y, x+2*r, y+2*r, fill=fill, outline='')
+        self.create_text(w/2, h/2, text=self.label, font=self.text_font, fill=self.ink)
+        if self.focus_get() == self:
+            self.create_rectangle(3, 3, w-3, h-3, outline=self.ink, dash=(2, 3))
 
 
 def entry(parent, label, value='', width=26):
@@ -69,7 +121,7 @@ class Dialog(tk.Toplevel):
         self.grab_set()
 
     def save_button(self, action):
-        ttk.Button(self.content, text='Salvar', style='Accent.TButton', command=lambda: self.safe(action)).pack(
+        ActionButton(self.content, 'Salvar', lambda: self.safe(action), 'primary', PANEL).pack(
             anchor='e', padx=8, pady=22)
 
     def safe(self, action):
@@ -100,11 +152,21 @@ class ERP:
         style.theme_use('clam')
         style.configure('TFrame', background=PANEL)
         style.configure('TLabel', background=PANEL, foreground=INK, font=('Segoe UI', 10))
-        style.configure('TButton', font=('Segoe UI', 10), padding=7)
+        style.configure('TButton', font=('Segoe UI', 10, 'bold'), padding=(15, 9),
+                        background='#deeee6', foreground=DARK, borderwidth=0, relief='flat')
+        style.map('TButton', background=[('pressed', '#afd6c1'), ('active', '#c7e4d4')])
         style.configure('Accent.TButton', background=GREEN, foreground='white')
-        style.map('Accent.TButton', background=[('active', DARK)])
+        style.map('Accent.TButton', background=[('pressed', '#14583d'), ('active', '#1a704c')],
+                  foreground=[('active', 'white')])
         style.configure('Treeview', font=('Segoe UI', 10), rowheight=30, background=PANEL)
         style.configure('Treeview.Heading', font=('Segoe UI', 10, 'bold'), background=MINT, foreground=DARK)
+        try:
+            self.window_icon = tk.PhotoImage(file=str(resource('icon.png')))
+            root.iconphoto(True, self.window_icon)
+            if sys.platform == 'win32':
+                root.iconbitmap(str(resource('senembi.ico')))
+        except (tk.TclError, OSError):
+            pass
         self.shell()
         self.render()
         root.protocol('WM_DELETE_WINDOW', self.close)
@@ -123,8 +185,8 @@ class ERP:
                      font=('Segoe UI', 18, 'bold')).pack(side='left', padx=20)
         tk.Label(header, text='ERP · Laboratório de projetos mecatrônicos', bg=DARK,
                  fg=MINT, font=('Segoe UI', 15)).pack(side='left')
-        tk.Button(header, text='▣  Pasta de backup', command=self.select_backup, bg=DARK,
-                  fg='white', relief='flat', cursor='hand2').pack(side='right', padx=14)
+        ActionButton(header, 'Pasta de backup', self.select_backup, 'secondary', DARK).pack(
+            side='right', padx=18)
         self.sidebar = tk.Frame(self.root, bg=DARK, width=230)
         self.sidebar.pack(side='left', fill='y')
         self.sidebar.pack_propagate(False)
@@ -155,7 +217,7 @@ class ERP:
         bar.pack(fill='x', padx=24, pady=(23, 10))
         tk.Label(bar, text=title, bg=BG, fg=DARK, font=('Segoe UI', 22, 'bold')).pack(side='left')
         if self.current in ('filaments', 'components', 'products', 'orders', 'projects'):
-            ttk.Button(bar, text='+ Adicionar', style='Accent.TButton', command=self.add).pack(side='right')
+            ActionButton(bar, '+ Adicionar', self.add, 'primary').pack(side='right')
             self.list_page()
         elif self.current == 'settings':
             self.settings_page()
@@ -190,10 +252,10 @@ class ERP:
         }[kind]
         tools = tk.Frame(self.main, bg=BG)
         tools.pack(fill='x', padx=24, pady=4)
-        ttk.Button(tools, text='Editar selecionado', command=self.edit).pack(side='left', padx=(0, 8))
-        ttk.Button(tools, text='Excluir selecionado', command=self.delete).pack(side='left')
+        ActionButton(tools, 'Editar selecionado', self.edit).pack(side='left', padx=(0, 9))
+        ActionButton(tools, 'Excluir selecionado', self.delete, 'danger').pack(side='left')
         if kind == 'projects':
-            ttk.Button(tools, text='Abrir Kanban', command=self.kanban).pack(side='left', padx=8)
+            ActionButton(tools, 'Abrir Kanban', self.kanban, 'primary').pack(side='left', padx=9)
         self.rows = {str(r['id']): r for r in self.store.all(kind)}
         self.tree = self.table(columns)
         for r in self.rows.values():
@@ -461,17 +523,18 @@ class ERP:
                     for label, target in (('←', 'A fazer' if status == 'Em andamento' else 'Em andamento'),
                                           ('→', 'Em andamento' if status == 'A fazer' else 'Concluído')):
                         if target != status:
-                            ttk.Button(actions, text=label, width=3,
-                                command=lambda i=task['id'], s=target: (self.store.task_status(i,s), refresh())).pack(side='left')
-                    ttk.Button(actions, text='Excluir', command=lambda i=task['id']: (
-                        self.store.delete_task(i), refresh())).pack(side='left')
+                            ActionButton(actions, label,
+                                lambda i=task['id'], s=target: (self.store.task_status(i,s), refresh()),
+                                background=MINT).pack(side='left', padx=(0, 5))
+                    ActionButton(actions, 'Excluir', lambda i=task['id']: (
+                        self.store.delete_task(i), refresh()), 'danger', MINT).pack(side='left')
         def add():
             try:
                 self.store.add_task(project['id'], title.get(), '' if due.get() == 'DD/MM/AAAA' else due.get())
                 title.delete(0, 'end')
                 refresh()
             except ValueError as exc: messagebox.showerror('Tarefa', str(exc), parent=d)
-        ttk.Button(form, text='Adicionar subtarefa', command=add).pack(side='left')
+        ActionButton(form, 'Adicionar subtarefa', add, 'primary').pack(side='left')
         refresh()
 
     def settings_page(self):
@@ -502,7 +565,7 @@ class ERP:
                 kwh = number(calc_w.get()) * hours / 1000
                 result.configure(text=f'Consumo: {kwh:.2f} kWh/mês · Custo: {money(energy_cost(calc_w.get(), hours, vars_["kwh"].get()))}/mês')
             except ValueError as exc: messagebox.showerror('Energia', str(exc), parent=self.root)
-        ttk.Button(panel, text='Calcular energia', command=calculate).pack(anchor='w', pady=8)
+        ActionButton(panel, 'Calcular energia', calculate, background=PANEL).pack(anchor='w', pady=8)
         ttk.Label(panel, text='Horas sugeridas por especialidade · altere para sua realidade',
                   font=('Segoe UI', 14, 'bold')).pack(anchor='w', pady=(22, 6))
         ttk.Label(panel, text='Estimativas iniciais editáveis em R$/h; não são tabela oficial.').pack(anchor='w')
@@ -518,7 +581,7 @@ class ERP:
                 sale = subtotal * (1 + number(vars_['profit'].get(), 'Lucro') / 100)
                 quote_label.configure(text=f'Base: {money(subtotal)} · Com lucro: {money(sale)}')
             except ValueError as exc: messagebox.showerror('Simulação', str(exc), parent=self.root)
-        ttk.Button(panel, text='Calcular serviço', command=service_quote).pack(anchor='w', pady=6)
+        ActionButton(panel, 'Calcular serviço', service_quote, background=PANEL).pack(anchor='w', pady=6)
         def save():
             try:
                 # Valida tudo antes de qualquer alteração persistente.
@@ -527,7 +590,7 @@ class ERP:
                 self.status.set('Parâmetros de cálculo salvos')
                 messagebox.showinfo('Parâmetros', 'Valores salvos. Reabra um produto para recalcular seu orçamento.', parent=self.root)
             except ValueError as exc: messagebox.showerror('Verifique os valores', str(exc), parent=self.root)
-        ttk.Button(panel, text='Salvar parâmetros', style='Accent.TButton', command=save).pack(anchor='w', pady=20)
+        ActionButton(panel, 'Salvar parâmetros', save, 'primary', PANEL).pack(anchor='w', pady=20)
         ttk.Label(panel, text='Referências: adrianoaoli.com/eletronica/calculadora-consumo-eletrico.html\n'
                   'workana.com/pt/freelancers/brasil/modelacao-3d · sebrae.com.br (precificação).',
                   wraplength=800).pack(anchor='w', pady=10)
@@ -535,10 +598,10 @@ class ERP:
     def calendar_page(self):
         line = tk.Frame(self.main, bg=BG)
         line.pack(fill='x', padx=24)
-        ttk.Button(line, text='◀', command=lambda: self.move_month(-1)).pack(side='left')
+        ActionButton(line, '◀', lambda: self.move_month(-1)).pack(side='left')
         tk.Label(line, text=f'{calendar.month_name[self.month.month]} {self.month.year}',
                  bg=BG, fg=DARK, font=('Segoe UI', 14, 'bold')).pack(side='left', padx=15)
-        ttk.Button(line, text='▶', command=lambda: self.move_month(1)).pack(side='left')
+        ActionButton(line, '▶', lambda: self.move_month(1)).pack(side='left')
         events = self.store.agenda()
         month_events = [r for r in events if r['date'].startswith(self.month.strftime('%Y-%m'))]
         weeks = calendar.monthcalendar(self.month.year, self.month.month)

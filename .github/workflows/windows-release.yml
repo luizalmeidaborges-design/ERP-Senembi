@@ -1,16 +1,6 @@
 name: Testar e publicar ERP Senembi
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'release-version.txt'
-      - 'app.py'
-      - 'core.py'
-      - 'backup.py'
-      - 'updater.py'
-      - 'assets/**'
-      - '.github/workflows/windows-release.yml'
   workflow_dispatch:
 
 permissions:
@@ -45,6 +35,7 @@ jobs:
           python -m PyInstaller --noconfirm --clean --onefile --windowed
           --name ERP_Senembi --icon assets\senembi.ico
           --add-data "assets\logo.png;assets"
+          --add-data "assets\icon.png;assets"
           --add-data "assets\update_config.json;assets" app.py
       - name: Manifesto SHA-256
         run: python make_manifest.py

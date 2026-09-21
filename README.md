@@ -4,7 +4,7 @@ Aplicativo Windows local para filamentos, materiais eletrônicos, produtos, pedi
 
 ## Executar
 
-Com Python 3.12 instalado, execute `python app.py`. No Windows, `build_windows.bat` instala PyInstaller, executa os testes e compila `dist\ERP_Senembi.exe`. O GitHub Actions compila e publica o mesmo EXE no [release mais recente](https://github.com/luizalmeidaborges-design/ERP-Senembi/releases/latest). O commit inicial em `main` dispara o build; novas alterações de código recompilam a versão atual. Incremente `release-version.txt` antes de disponibilizar uma atualização aos usuários. Cada release inclui `update.json` com tamanho e SHA-256. Ao abrir uma versão anterior, o aplicativo executa a versão nova previamente verificada.
+Com Python 3.12 instalado, execute `python app.py`. No Windows, `build_windows.bat` instala PyInstaller, executa os testes e compila `dist\ERP_Senembi.exe`. O ícone de camaleão enviado para o projeto aparece na janela e no executável. O [workflow do GitHub Actions](https://github.com/luizalmeidaborges-design/ERP-Senembi/actions/workflows/windows-release.yml) compila e publica o mesmo EXE quando acionado manualmente em **Actions → Testar e publicar ERP Senembi → Run workflow**. Alterações enviadas ao repositório não iniciam a compilação. A próxima versão está preparada como **1.0.1** em `release-version.txt` e `assets/update_config.json`. Incremente ambos antes de uma versão posterior. Cada release inclui `update.json` com tamanho e SHA-256. Ao abrir uma versão anterior, o aplicativo executa a versão nova previamente verificada.
 
 ## Campos e fórmulas
 
