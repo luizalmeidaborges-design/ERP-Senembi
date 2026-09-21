@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from backup import Backup
-from core import Store, electronic_quote, energy_cost, print_quote
+from core import Store, electronic_quote, energy_cost, filament_prefix, print_quote
 
 
 class ERPTests(unittest.TestCase):
@@ -37,16 +37,48 @@ class ERPTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp)
             store = Store(path / 'senembi.db')
-            a = store.save('filaments', 'Preto', {}, code_prefix='FIL-PLA-PRETO')
+            a = store.save('filaments', 'Preto', {'material': 'PLA'})
             store.remove(a)
-            b = store.save('filaments', 'Branco', {}, code_prefix='FIL-PLA-BRANCO')
-            self.assertEqual(store.get(b)['code'], 'FIL-PLA-BRANCO-00002')
+            b = store.save('filaments', 'Branco', {'material': 'PLA'})
+            self.assertEqual(store.get(b)['code'], 'PLA-BRA-00002')
             backup = Backup(path)
             backup.select(path)
             result = backup.create(store.path)
             self.assertTrue(result.local.is_file())
             self.assertTrue(result.selected.is_file())
             store.db.close()
+
+    def test_migrates_existing_filaments_and_product_reference(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'senembi.db'
+            store = Store(path)
+            first = store.save('filaments', 'Laranja', {'material': 'PLA'})
+            second = store.save('filaments', 'Cobre V Silk', {'material': 'PLA'})
+            legacy = {'PLA-LAR-00001': 'FIL-PLA-LARANJA-00001',
+                      'PLA-COB-00002': 'FIL-PLA-COBREVSI-00002'}
+            with store.db:
+                for new, old in legacy.items():
+                    store.db.execute('UPDATE records SET code=? WHERE code=?', (old, new))
+            product = store.save('products', 'Peça', {'worst_code': legacy['PLA-LAR-00001']})
+            store.db.close()
+
+            store = Store(path)
+            self.assertEqual(store.get(first)['code'], 'PLA-LAR-00001')
+            self.assertEqual(store.get(second)['code'], 'PLA-COB-00002')
+            self.assertEqual(store.get(product)['worst_code'], 'PLA-LAR-00001')
+            store.save('filaments', 'Amarelo', {'material': 'PETG'}, id_=first)
+            self.assertEqual(store.get(first)['code'], 'PETG-AMA-00001')
+            self.assertEqual(store.get(product)['worst_code'], 'PETG-AMA-00001')
+            third = store.save('filaments', 'Preto', {'material': 'TPU'})
+            self.assertEqual(store.get(third)['code'], 'TPU-PRE-00003')
+            store.db.close()
+            store = Store(path)
+            self.assertEqual(store.get(first)['code'], 'PETG-AMA-00001')
+            self.assertEqual(store.get(product)['worst_code'], 'PETG-AMA-00001')
+            store.db.close()
+
+    def test_filament_prefix_removes_accents(self):
+        self.assertEqual(filament_prefix('PA-CF', 'Peça branca'), 'PACF-PEC')
 
 
 if __name__ == '__main__':

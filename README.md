@@ -10,7 +10,7 @@ Com Python 3.12 instalado, execute `python app.py`. No Windows, `build_windows.b
 
 ## Campos e fórmulas
 
-- Filamento: `FIL-MATERIAL-DESCRICAO-00001`, material, descrição, peso útil do carretel em gramas, valor total, densidade e fornecedor. A densidade é informação de catálogo; o orçamento utiliza o **peso informado pelo fatiador**.
+- Filamento: `MATERIAL-DES-00001`, usando as três primeiras letras da descrição (por exemplo, `PLA-LAR-00002`). Ao abrir a nova versão, os códigos antigos são convertidos automaticamente, mantendo seus números e as referências nos produtos. O cadastro contém material, descrição, peso útil do carretel em gramas, valor total, densidade e fornecedor. A densidade é informação de catálogo; o orçamento utiliza o **peso informado pelo fatiador**.
 - Componente: `ELE-00001`, nome, descrição, unidades do pacote, preço do pacote, fornecedor e link de datasheet. Custo unitário = preço do pacote / quantidade.
 - Impresso: escolhe filamentos possíveis e usa o **maior preço por grama**, multiplicado pelo peso da peça. Energia = potência média em watts × horas de impressão / 1000 × tarifa por kWh. Horas de modelagem podem ser adicionadas.
 - Eletrônico: soma quantidade × custo unitário de cada componente e horas de preparo × valor da hora técnica.

@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sqlite3
+import unicodedata
 from datetime import date
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
@@ -23,8 +24,17 @@ DEFAULT_RATES = {
 }
 DEFAULT_SETTINGS = {'kwh': 1.0, 'printer_w': 350, 'profit': 30,
                     'modeling_hour': 100, 'electronics_hour': 120, 'technical_hour': 120}
-PREFIXES = {'filaments': 'FIL', 'components': 'ELE', 'products': 'PRD',
+PREFIXES = {'components': 'ELE', 'products': 'PRD',
             'orders': 'OP', 'projects': 'PRO'}
+
+
+def filament_prefix(material, description):
+    """Ex.: PLA + Laranja -> PLA-LAR; mantém a sequência fora do prefixo."""
+    def letters(value):
+        plain = unicodedata.normalize('NFKD', str(value).upper())
+        return re.sub(r'[^A-Z0-9]', '', plain)
+
+    return f'{letters(material)[:5] or "MAT"}-{letters(description)[:3] or "SEM"}'
 
 
 def number(value, label='Valor', *, minimum=0):
@@ -126,6 +136,66 @@ class Store:
                 title TEXT NOT NULL, due TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'A fazer');
         ''')
         self.db.commit()
+        self._migrate_filament_codes()
+
+    def _update_filament_references(self, mapping):
+        """Mantém as referências textuais dos orçamentos já cadastrados."""
+        if not mapping:
+            return
+        for product in self.db.execute("SELECT id,payload FROM records WHERE kind='products'"):
+            payload = json.loads(product['payload'])
+            old = payload.get('worst_code')
+            if old in mapping:
+                payload['worst_code'] = mapping[old]
+                self.db.execute('UPDATE records SET payload=? WHERE id=?',
+                                (json.dumps(payload, ensure_ascii=False), product['id']))
+
+    def _migrate_filament_codes(self):
+        """Converte códigos antigos sem renumerar filamentos nem trocar suas IDs."""
+        rows = self.db.execute(
+            "SELECT id,code,name,payload FROM records WHERE kind='filaments' ORDER BY id"
+        ).fetchall()
+        counter = self.db.execute("SELECT last_value FROM counters WHERE kind='filaments'").fetchone()
+        last = counter[0] if counter else 0
+        for row in rows:
+            suffix = re.search(r'-(\d+)$', row['code'])
+            if suffix:
+                last = max(last, int(suffix.group(1)))
+        mapping = {}
+        changes = []
+        reserved = {row['code'] for row in self.db.execute(
+            "SELECT code FROM records WHERE kind!='filaments'")}
+        assigned = set()
+        for row in rows:
+            suffix = re.search(r'-(\d+)$', row['code'])
+            if suffix:
+                sequence = int(suffix.group(1))
+            else:
+                last += 1
+                sequence = last
+            material = json.loads(row['payload']).get('material', '')
+            prefix = filament_prefix(material, row['name'])
+            code = f'{prefix}-{sequence:05d}'
+            while code in assigned or code in reserved:
+                last += 1
+                code = f'{prefix}-{last:05d}'
+            assigned.add(code)
+            if code != row['code']:
+                mapping[row['code']] = code
+                changes.append((row['id'], code))
+        if not changes and (not rows or (counter and counter[0] >= last)):
+            return
+        with self.db:
+            # IDs temporárias evitam colisões enquanto os códigos são renomeados.
+            for id_, _ in changes:
+                self.db.execute('UPDATE records SET code=? WHERE id=?',
+                                (f'__MIGRANDO_FILAMENTO_{id_}__', id_))
+            for id_, code in changes:
+                self.db.execute('UPDATE records SET code=? WHERE id=?', (code, id_))
+            self._update_filament_references(mapping)
+            self.db.execute('INSERT INTO counters(kind,last_value) VALUES (?,?) '
+                            'ON CONFLICT(kind) DO UPDATE SET last_value=max(last_value,excluded.last_value)',
+                            ('filaments', last))
 
     def setting(self, key):
         row = self.db.execute('SELECT value FROM settings WHERE key=?', (key,)).fetchone()
@@ -156,7 +226,8 @@ class Store:
         due = iso_date(due)
         with self.db:
             if id_ is None:
-                prefix = code_prefix or PREFIXES[kind]
+                prefix = (filament_prefix(payload.get('material', ''), name)
+                          if kind == 'filaments' else code_prefix or PREFIXES[kind])
                 row = self.db.execute('SELECT last_value FROM counters WHERE kind=?', (kind,)).fetchone()
                 count = row[0] + 1 if row else 1
                 self.db.execute('INSERT INTO counters VALUES (?,?) ON CONFLICT(kind) DO UPDATE SET last_value=excluded.last_value',
@@ -168,8 +239,17 @@ class Store:
             old = self.get(id_)
             if not old or old['kind'] != kind:
                 raise ValueError('Registro não encontrado.')
-            self.db.execute('UPDATE records SET name=?,due=?,status=?,payload=? WHERE id=?',
-                            (name.strip(), due, status, json.dumps(payload, ensure_ascii=False), id_))
+            code = old['code']
+            if kind == 'filaments':
+                suffix = re.search(r'-(\d+)$', code)
+                if suffix is None:
+                    raise ValueError('Código de filamento sem número sequencial.')
+                code = f'{filament_prefix(payload.get("material", ""), name)}-{int(suffix.group(1)):05d}'
+            self.db.execute('UPDATE records SET code=?,name=?,due=?,status=?,payload=? WHERE id=?',
+                            (code, name.strip(), due, status,
+                             json.dumps(payload, ensure_ascii=False), id_))
+            if code != old['code']:
+                self._update_filament_references({old['code']: code})
             return id_
 
     def remove(self, id_):

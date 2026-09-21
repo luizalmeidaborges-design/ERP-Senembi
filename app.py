@@ -4,7 +4,6 @@ from __future__ import annotations
 import calendar
 import json
 import queue
-import re
 import sys
 import threading
 import tkinter as tk
@@ -310,9 +309,7 @@ class ERP:
                 'reel_g': float(number(reel.get(), 'Peso', minimum=0.001)),
                 'value': float(number(value.get(), 'Valor')),
                 'density': float(number(density.get(), 'Densidade', minimum=0.001)),
-                'supplier': supplier.get()}, id_=get('id') or None,
-                code_prefix='FIL-'+re.sub(r'[^A-Z0-9]+', '', material.get().upper())[:5]
-                            +'-'+re.sub(r'[^A-Z0-9]+', '', name.get().upper())[:8])
+                'supplier': supplier.get()}, id_=get('id') or None)
         d.save_button(save)
 
     def component(self, old=None):
