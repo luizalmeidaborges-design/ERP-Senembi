@@ -18,6 +18,8 @@ from core import (DEFAULT_RATES, Store, amount, data_dir, display_date,
 from updater import check_and_stage, launch_cached, read_config
 
 BG, PANEL, DARK, GREEN, MINT, INK = '#edf5f1', '#ffffff', '#153b36', '#228659', '#d9f3dc', '#183831'
+FIELD = '#f3f8f5'
+BORDER = '#cddfd3'
 PAGES = [('Filamentos', 'filaments'), ('Materiais Eletrônicos', 'components'),
          ('Produtos', 'products'), ('Pedidos', 'orders'), ('Projetos', 'projects'),
          ('Informações adicionais', 'settings'), ('Calendário', 'calendar'),
@@ -81,31 +83,75 @@ class ActionButton(tk.Canvas):
             self.create_rectangle(3, 3, w-3, h-3, outline=self.ink, dash=(2, 3))
 
 
-def entry(parent, label, value='', width=26):
-    box = ttk.Frame(parent)
-    ttk.Label(box, text=label).pack(anchor='w', pady=(8, 2))
+def form_place(parent, widget, span=1):
+    """Place a field in a two-column dialog or in a regular stacked panel."""
+    if getattr(parent, '_form_columns', False):
+        slot = parent._form_next
+        if span == 2 and slot % 2:
+            slot += 1
+        row, col = divmod(slot, 2)
+        widget.grid(row=row, column=col, columnspan=span, sticky='ew',
+                    padx=(0, 9) if col == 0 and span == 1 else (9, 0) if col else 0,
+                    pady=(0, 14))
+        parent._form_next = slot + span
+    else:
+        widget.pack(fill='x', padx=8, pady=(0, 14))
+
+
+def form_columns(parent):
+    parent._form_columns = True
+    parent._form_next = 0
+    for col in range(2):
+        parent.grid_columnconfigure(col, weight=1, uniform='form_fields')
+
+
+def form_section(parent, title):
+    label = tk.Label(parent, text=title.upper(), bg=PANEL, fg=GREEN,
+                     font=('Segoe UI', 9, 'bold'), anchor='w')
+    form_place(parent, label, span=2)
+
+
+def form_note(parent, text):
+    box = tk.Frame(parent, bg='#e8f5ed', padx=14, pady=12)
+    tk.Label(box, text=text, bg='#e8f5ed', fg=DARK, justify='left',
+             wraplength=660, font=('Segoe UI', 9)).pack(anchor='w')
+    form_place(parent, box, span=2)
+
+
+def field_box(parent, label):
+    box = tk.Frame(parent, bg=PANEL)
+    tk.Label(box, text=label, bg=PANEL, fg=DARK, anchor='w',
+             font=('Segoe UI', 10, 'bold')).pack(fill='x', pady=(0, 6))
+    return box
+
+
+def entry(parent, label, value='', width=26, span=1):
+    box = field_box(parent, label)
     var = tk.StringVar(value=str(value if value is not None else ''))
-    ttk.Entry(box, textvariable=var, width=width).pack(fill='x')
-    box.pack(fill='x', padx=8)
+    tk.Entry(box, textvariable=var, width=width, font=('Segoe UI', 10),
+             bg=FIELD, fg=INK, insertbackground=INK, relief='flat', bd=0,
+             highlightthickness=1, highlightbackground=BORDER,
+             highlightcolor=GREEN).pack(fill='x', ipady=9, ipadx=10)
+    form_place(parent, box, span=span)
     return var
 
 
 def choice(parent, label, options, value=''):
-    box = ttk.Frame(parent)
-    ttk.Label(box, text=label).pack(anchor='w', pady=(8, 2))
+    box = field_box(parent, label)
     var = tk.StringVar(value=value or (options[0] if options else ''))
-    ttk.Combobox(box, values=options, textvariable=var, state='readonly').pack(fill='x')
-    box.pack(fill='x', padx=8)
+    ttk.Combobox(box, values=options, textvariable=var, state='readonly',
+                 style='Form.TCombobox').pack(fill='x', ipady=3)
+    form_place(parent, box)
     return var
 
 
 class Dialog(tk.Toplevel):
-    def __init__(self, app, title, width=660, height=710):
+    def __init__(self, app, title, width=850, height=680):
         super().__init__(app.root)
         self.app = app
         self.title(title)
         self.geometry(f'{width}x{height}')
-        self.minsize(530, 480)
+        self.minsize(680, 480)
         self.transient(app.root)
         self.configure(bg=BG)
         self.body = tk.Canvas(self, bg=PANEL, highlightthickness=0)
@@ -113,15 +159,25 @@ class Dialog(tk.Toplevel):
         self.body.configure(yscrollcommand=scroll.set)
         self.body.pack(side='left', fill='both', expand=True)
         scroll.pack(side='right', fill='y')
-        self.content = ttk.Frame(self.body, padding=18)
-        window = self.body.create_window((0, 0), window=self.content, anchor='nw')
-        self.content.bind('<Configure>', lambda e: self.body.configure(scrollregion=self.body.bbox('all')))
+        self.page = tk.Frame(self.body, bg=PANEL, padx=28, pady=24)
+        tk.Label(self.page, text=title, bg=PANEL, fg=DARK,
+                 font=('Segoe UI', 19, 'bold'), anchor='w').pack(fill='x', pady=(0, 5))
+        tk.Label(self.page, text='Preencha os dados abaixo para salvar o cadastro.',
+                 bg=PANEL, fg='#60776b', font=('Segoe UI', 10),
+                 anchor='w').pack(fill='x', pady=(0, 24))
+        self.content = tk.Frame(self.page, bg=PANEL)
+        self.content.pack(fill='x')
+        form_columns(self.content)
+        self.footer = tk.Frame(self.page, bg=PANEL)
+        self.footer.pack(fill='x', pady=(8, 4))
+        window = self.body.create_window((0, 0), window=self.page, anchor='nw')
+        self.page.bind('<Configure>', lambda e: self.body.configure(scrollregion=self.body.bbox('all')))
         self.body.bind('<Configure>', lambda e: self.body.itemconfigure(window, width=e.width))
         self.grab_set()
 
     def save_button(self, action):
-        ActionButton(self.content, 'Salvar', lambda: self.safe(action), 'primary', PANEL).pack(
-            anchor='e', padx=8, pady=22)
+        ActionButton(self.footer, 'Salvar cadastro', lambda: self.safe(action),
+                     'primary', PANEL).pack(side='right')
 
     def safe(self, action):
         try:
@@ -157,6 +213,12 @@ class ERP:
         style.configure('Accent.TButton', background=GREEN, foreground='white')
         style.map('Accent.TButton', background=[('pressed', '#14583d'), ('active', '#1a704c')],
                   foreground=[('active', 'white')])
+        style.configure('Form.TCombobox', font=('Segoe UI', 10), padding=(10, 7),
+                        fieldbackground=FIELD, background='#e4f1e9', foreground=INK,
+                        arrowcolor=GREEN, borderwidth=1, relief='flat')
+        style.map('Form.TCombobox', fieldbackground=[('readonly', FIELD)],
+                  foreground=[('readonly', INK)],
+                  background=[('active', '#d7ebdf'), ('readonly', '#e4f1e9')])
         style.configure('Treeview', font=('Segoe UI', 10), rowheight=30, background=PANEL)
         style.configure('Treeview.Heading', font=('Segoe UI', 10, 'bold'), background=MINT, foreground=DARK)
         try:
@@ -298,8 +360,10 @@ class ERP:
     def filament(self, old=None):
         d = Dialog(self, 'Filamento' + (f' · {old["code"]}' if old else ''))
         get = lambda k, default='': old.get(k, default) if old else default
+        form_section(d.content, 'Identificação')
         material = choice(d.content, 'Material', ['PLA', 'PETG', 'ABS', 'ASA', 'TPU', 'PA', 'PA-CF', 'Outro'], get('material', 'PLA'))
         name = entry(d.content, 'Descrição (cor, fabricante, acabamento)', get('name'))
+        form_section(d.content, 'Estoque e custos')
         reel = entry(d.content, 'Peso de filamento no carretel (g)', get('reel_g', '1000'))
         value = entry(d.content, 'Valor do carretel (R$)', get('value'))
         density = entry(d.content, 'Densidade (g/cm³)', get('density', '1,24'))
@@ -315,8 +379,10 @@ class ERP:
     def component(self, old=None):
         d = Dialog(self, 'Material eletrônico' + (f' · {old["code"]}' if old else ''))
         get = lambda k, default='': old.get(k, default) if old else default
+        form_section(d.content, 'Identificação')
         name = entry(d.content, 'Nome (Arduino, ESP32, transistor...)', get('name'))
         description = entry(d.content, 'Descrição', get('description'))
+        form_section(d.content, 'Compra e referência')
         quantity = entry(d.content, 'Quantidade no pacote', get('quantity', '1'))
         value = entry(d.content, 'Valor do pacote (R$)', get('package_value'))
         supplier = entry(d.content, 'Fornecedor', get('supplier'))
@@ -333,9 +399,14 @@ class ERP:
         d.save_button(save)
 
     def multi_select(self, parent, label, records, selected=None):
-        ttk.Label(parent, text=label).pack(anchor='w', padx=8, pady=(14, 3))
-        lst = tk.Listbox(parent, selectmode='multiple', exportselection=False, height=min(7, max(3, len(records))))
-        lst.pack(fill='x', padx=8)
+        box = field_box(parent, label)
+        lst = tk.Listbox(box, selectmode='multiple', exportselection=False,
+                         height=min(7, max(3, len(records))), font=('Segoe UI', 10),
+                         bg=FIELD, fg=INK, selectbackground=GREEN, selectforeground='white',
+                         relief='flat', bd=0, activestyle='none', highlightthickness=1,
+                         highlightbackground=BORDER, highlightcolor=GREEN)
+        lst.pack(fill='x', ipady=6, ipadx=8)
+        form_place(parent, box, span=2)
         selected = set(selected or [])
         for i, r in enumerate(records):
             lst.insert('end', f'{r["code"]} · {r["name"]}')
@@ -345,14 +416,19 @@ class ERP:
     def product(self, old=None):
         d = Dialog(self, 'Produto' + (f' · {old["code"]}' if old else ''), height=780)
         get = lambda k, default='': old.get(k, default) if old else default
+        form_section(d.content, 'Dados do produto')
         name = entry(d.content, 'Nome do produto', get('name'))
         kind = choice(d.content, 'Tipo de produto', list(KINDS), get('type', 'Impresso'))
-        margin = entry(d.content, 'Lucro sobre o custo (%)', get('profit', self.store.setting('profit')))
-        detail = ttk.Frame(d.content)
-        detail.pack(fill='x')
+        margin = entry(d.content, 'Lucro sobre o custo (%)',
+                       get('profit', self.store.setting('profit')), span=2)
+        form_section(d.content, 'Composição e produção')
+        detail = tk.Frame(d.content, bg=PANEL)
+        form_place(d.content, detail, span=2)
+        form_columns(detail)
         state = {}
         def draw(*_):
             for w in detail.winfo_children(): w.destroy()
+            detail._form_next = 0
             state.clear()
             mode = kind.get()
             if mode == 'Impresso':
@@ -375,8 +451,8 @@ class ERP:
                                                        products, get('product_ids', []))
                 state['hours'] = entry(detail, 'Horas de montagem/integração', get('assembly_hours', '0'))
                 state['hour_rate'] = entry(detail, 'Hora técnica (R$/h)', get('hour_rate', self.store.setting('technical_hour')))
-            ttk.Label(detail, text='O orçamento é recalculado e salvo ao confirmar.\n'
-                      'Custo = materiais + energia + trabalho; preço = custo × (1 + lucro/100).').pack(anchor='w', padx=8, pady=15)
+            form_note(detail, 'O orçamento é recalculado ao salvar. '
+                      'Custo = materiais + energia + trabalho; preço = custo × (1 + lucro/100).')
         kind.trace_add('write', draw)
         draw()
         def save():
@@ -415,15 +491,19 @@ class ERP:
     def order(self, old=None):
         d = Dialog(self, 'Pedido' + (f' · {old["code"]}' if old else ''))
         get = lambda k, default='': old.get(k, default) if old else default
+        form_section(d.content, 'Cliente e entrega')
         client = entry(d.content, 'Cliente', get('name'))
         due = entry(d.content, 'Entrega (DD/MM/AAAA)', display_date(get('due')))
+        form_section(d.content, 'Produtos do pedido')
         products = self.store.all('products')
         selected = self.multi_select(d.content, 'Produtos (Ctrl+clique)', products, [x['id'] for x in get('items', [])])
         qty = entry(d.content, 'Quantidades na ordem acima (ex.: 2,1)',
-                    ','.join(str(x['qty']) for x in get('items', [])))
+                    ','.join(str(x['qty']) for x in get('items', [])), span=2)
+        form_section(d.content, 'Acompanhamento e cobrança')
         status = choice(d.content, 'Status', ['Aberto', 'Em produção', 'Pronto', 'Entregue', 'Cancelado'], get('status', 'Aberto'))
         payment = choice(d.content, 'Pagamento', ['Pendente', 'Parcial', 'Pago'], get('payment', 'Pendente'))
-        charge = entry(d.content, 'Valor de cobrança manual (R$; deixe vazio para calcular)', get('manual_charge'))
+        charge = entry(d.content, 'Cobrança manual (R$) · opcional',
+                       get('manual_charge'), span=2)
         def save():
             items = selected()
             amounts = [s.strip() for s in qty.get().split(',') if s.strip()]
@@ -448,16 +528,19 @@ class ERP:
     def project(self, old=None):
         d = Dialog(self, 'Projeto de mecatrônica' + (f' · {old["code"]}' if old else ''), height=780)
         get = lambda k, default='': old.get(k, default) if old else default
+        form_section(d.content, 'Dados do projeto')
         name = entry(d.content, 'Nome do projeto', get('name'))
         client = entry(d.content, 'Cliente', get('client'))
         due = entry(d.content, 'Prazo (DD/MM/AAAA)', display_date(get('due')))
         status = choice(d.content, 'Status', ['Planejamento', 'Em desenvolvimento', 'Validação', 'Concluído', 'Cancelado'],
                         get('status', 'Planejamento'))
+        form_section(d.content, 'Escopo e qualidade')
         scope = entry(d.content, 'Oportunidade ou problema', get('scope'))
         objective = entry(d.content, 'Objetivo e entregáveis', get('objective'))
         constraints = entry(d.content, 'Restrições e premissas', get('constraints'))
         quality = entry(d.content, 'Critérios de qualidade e aceitação', get('quality'))
-        risks = entry(d.content, 'Riscos e testes previstos', get('risks'))
+        risks = entry(d.content, 'Riscos e testes previstos', get('risks'), span=2)
+        form_section(d.content, 'Estimativa e preço')
         specialization = choice(d.content, 'Especialidade para estimativa de hora',
                                 ['Hora técnica geral'] + list(DEFAULT_RATES), get('specialization', 'Hora técnica geral'))
         hours = entry(d.content, 'Horas técnicas previstas', get('hours', '0'))
@@ -468,7 +551,7 @@ class ERP:
                          else self.store.setting('technical_hour')))
         specialization.trace_add('write', choose_rate)
         materials = entry(d.content, 'Materiais e serviços externos (R$)', get('materials', '0'))
-        profit = entry(d.content, 'Lucro (%)', get('profit', self.store.setting('profit')))
+        profit = entry(d.content, 'Lucro (%)', get('profit', self.store.setting('profit')), span=2)
         def save():
             cost = number(hours.get(), 'Horas') * number(rate.get(), 'Hora técnica') + number(materials.get(), 'Materiais')
             sale = cost * (1 + number(profit.get(), 'Lucro')/100)
