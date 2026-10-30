@@ -25,6 +25,13 @@ export const TASK_STATUS = ['A fazer', 'Em andamento', 'Concluído'];
 
 export class UserError extends Error {}
 
+// IDs separados por dispositivo (id % 16): 0 = web, 1–15 = computadores com o app desktop.
+// Assim um registro criado na web e outro criado no desktop nunca recebem o mesmo id.
+export const ID_SLOTS = 16;
+export const WEB_DEVICE = 0;
+// Ids de registros excluídos não são reaproveitados (o outro lado pode ainda não ter recebido a exclusão).
+const NEXT_ID = (table) => `(SELECT (MAX(m)/${ID_SLOTS}+1)*${ID_SLOTS}+${WEB_DEVICE} FROM (SELECT COALESCE(MAX(id),0) AS m FROM ${table} UNION ALL SELECT COALESCE(MAX(id),0) FROM tombstones WHERE tbl='${table}'))`;
+
 export function filamentPrefix(material, description) {
   const letters = (v) => String(v ?? '').toUpperCase().normalize('NFKD').replace(/[^A-Z0-9]/g, '');
   return `${letters(material).slice(0, 5) || 'MAT'}-${letters(description).slice(0, 3) || 'SEM'}`;
@@ -129,8 +136,16 @@ export class Store {
   constructor(db) { this.db = db; }
 
   static unpack(row) {
-    const { payload, ...rest } = row;
+    const { payload, rev: _rev, updated_at: _updated, ...rest } = row;
     return { ...rest, ...JSON.parse(payload) };
+  }
+
+  async nextCode(kind, name, payload, codePrefix = null) {
+    const prefix = kind === 'filaments' ? filamentPrefix(payload.material, name) : codePrefix || PREFIXES[kind];
+    const counter = await this.db.prepare(
+      'INSERT INTO counters VALUES (?,1) ON CONFLICT(kind) DO UPDATE SET last_value=last_value+1 RETURNING last_value'
+    ).bind(kind).first();
+    return `${prefix}-${String(counter.last_value).padStart(5, '0')}`;
   }
 
   async setting(key) {
@@ -150,7 +165,7 @@ export class Store {
     const keys = [...Object.keys(DEFAULT_SETTINGS), ...Object.keys(DEFAULT_RATES)];
     const values = keys.filter((k) => k in input).map((k) => [k, number(input[k], k)]);
     await this.db.batch(values.map(([k, v]) => this.db.prepare(
-      'INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').bind(k, JSON.stringify(v))));
+      'INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').bind(k, JSON.stringify(v))));
   }
 
   async all(kind) {
@@ -176,14 +191,10 @@ export class Store {
     due = isoDate(due);
     const body = JSON.stringify(payload);
     if (id == null) {
-      const prefix = kind === 'filaments' ? filamentPrefix(payload.material, name) : codePrefix || PREFIXES[kind];
-      const counter = await this.db.prepare(
-        'INSERT INTO counters VALUES (?,1) ON CONFLICT(kind) DO UPDATE SET last_value=last_value+1 RETURNING last_value'
-      ).bind(kind).first();
-      const code = `${prefix}-${String(counter.last_value).padStart(5, '0')}`;
-      const res = await this.db.prepare('INSERT INTO records(kind,code,name,due,status,payload) VALUES (?,?,?,?,?,?)')
-        .bind(kind, code, name, due, status, body).run();
-      return res.meta.last_row_id;
+      const code = await this.nextCode(kind, name, payload, codePrefix);
+      const row = await this.db.prepare(`INSERT INTO records(id,kind,code,name,due,status,payload) VALUES (${NEXT_ID('records')},?,?,?,?,?,?) RETURNING id`)
+        .bind(kind, code, name, due, status, body).first();
+      return row.id;
     }
     const old = await this.get(id);
     if (!old || old.kind !== kind) throw new UserError('Registro não encontrado.');
@@ -219,7 +230,7 @@ export class Store {
     if (!project || project.kind !== 'projects') throw new UserError('Projeto não encontrado.');
     title = text(title, 300);
     if (!title) throw new UserError('Informe o título da subtarefa.');
-    await this.db.prepare('INSERT INTO tasks(project_id,title,due) VALUES (?,?,?)').bind(projectId, title, isoDate(due)).run();
+    await this.db.prepare(`INSERT INTO tasks(id,project_id,title,due) VALUES (${NEXT_ID('tasks')},?,?,?)`).bind(projectId, title, isoDate(due)).run();
   }
 
   async tasks() {
@@ -370,11 +381,96 @@ export class Store {
       ...records.map((r) => db.prepare('INSERT INTO records(id,kind,code,name,due,status,payload) VALUES (?,?,?,?,?,?,?)')
         .bind(r.id, r.kind, r.code, String(r.name ?? ''), String(r.due ?? ''), String(r.status ?? ''), r.payload)),
       ...counters.map((c) => db.prepare('INSERT INTO counters VALUES (?,?)').bind(String(c.kind), Number(c.last_value))),
-      ...settings.map((s) => db.prepare('INSERT INTO settings VALUES (?,?)').bind(String(s.key), String(s.value))),
+      ...settings.map((s) => db.prepare('INSERT INTO settings(key,value) VALUES (?,?)').bind(String(s.key), String(s.value))),
       ...tasks.map((t) => db.prepare('INSERT INTO tasks(id,project_id,title,due,status) VALUES (?,?,?,?,?)')
         .bind(Number(t.id), Number(t.project_id), String(t.title ?? ''), String(t.due ?? ''), String(t.status ?? 'A fazer'))),
     ];
     await db.batch(stmts); // batch do D1 é uma transação: ou importa tudo, ou nada.
     return { records: records.length, tasks: tasks.length };
+  }
+
+  // ---------- sincronização com o app desktop ----------
+  // O desktop envia o que mudou nele (registros, subtarefas, parâmetros e exclusões, com updated_at)
+  // e recebe o que mudou aqui desde o último rev que ele viu. Conflito: vale a alteração mais recente.
+  async sync(input) {
+    const db = this.db;
+    const since = Number.isInteger(input?.since) && input.since >= 0 ? input.since : 0;
+    const list = (k) => (Array.isArray(input?.[k]) ? input[k] : []);
+    const stamp = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Math.floor(Number(v)) : 0);
+    const renamed = [];
+    const tomb = async (tbl, id) => db.prepare('SELECT deleted_at FROM tombstones WHERE tbl=? AND id=?').bind(tbl, id).first();
+
+    for (const r of list('records')) {
+      if (!Number.isInteger(r.id) || r.id <= 0 || !KINDS.includes(r.kind) || typeof r.code !== 'string' || typeof r.payload !== 'string') {
+        throw new UserError('Registro inválido na sincronização.');
+      }
+      const payload = JSON.parse(r.payload);
+      const at = stamp(r.updated_at);
+      const cur = await db.prepare('SELECT updated_at FROM records WHERE id=?').bind(r.id).first();
+      if (cur && cur.updated_at >= at) continue;
+      const del = !cur && await tomb('records', r.id);
+      if (del && del.deleted_at >= at) continue;
+      let code = r.code;
+      const clash = await db.prepare('SELECT id FROM records WHERE code=? AND id<>?').bind(code, r.id).first();
+      if (clash) {
+        // Dois lados criaram o mesmo código (ex.: OP-00007) sem se ver: o registro que chegou ganha o próximo número.
+        code = await this.nextCode(r.kind, String(r.name ?? ''), payload);
+        renamed.push({ id: r.id, from: r.code, to: code });
+      }
+      await db.prepare(`INSERT INTO records(id,kind,code,name,due,status,payload,updated_at) VALUES (?,?,?,?,?,?,?,?)
+        ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, code=excluded.code, name=excluded.name, due=excluded.due,
+        status=excluded.status, payload=excluded.payload, updated_at=excluded.updated_at`)
+        .bind(r.id, r.kind, code, String(r.name ?? ''), String(r.due ?? ''), String(r.status ?? ''), r.payload, at).run();
+    }
+    for (const t of list('tasks')) {
+      if (!Number.isInteger(t.id) || t.id <= 0 || !Number.isInteger(t.project_id)) throw new UserError('Subtarefa inválida na sincronização.');
+      const at = stamp(t.updated_at);
+      const cur = await db.prepare('SELECT updated_at FROM tasks WHERE id=?').bind(t.id).first();
+      if (cur && cur.updated_at >= at) continue;
+      const del = !cur && await tomb('tasks', t.id);
+      if (del && del.deleted_at >= at) continue;
+      if (!await db.prepare("SELECT 1 FROM records WHERE id=? AND kind='projects'").bind(t.project_id).first()) continue;
+      await db.prepare(`INSERT INTO tasks(id,project_id,title,due,status,updated_at) VALUES (?,?,?,?,?,?)
+        ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, title=excluded.title, due=excluded.due,
+        status=excluded.status, updated_at=excluded.updated_at`)
+        .bind(t.id, t.project_id, String(t.title ?? ''), String(t.due ?? ''), TASK_STATUS.includes(t.status) ? t.status : 'A fazer', at).run();
+    }
+    for (const st of list('settings')) {
+      if (typeof st.key !== 'string' || typeof st.value !== 'string') throw new UserError('Parâmetro inválido na sincronização.');
+      JSON.parse(st.value);
+      const at = stamp(st.updated_at);
+      const cur = await db.prepare('SELECT updated_at FROM settings WHERE key=?').bind(st.key).first();
+      if (cur && cur.updated_at >= at) continue;
+      await db.prepare(`INSERT INTO settings(key,value,updated_at) VALUES (?,?,?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`).bind(st.key, st.value, at).run();
+    }
+    for (const d of list('deleted')) {
+      if (!['records', 'tasks'].includes(d.tbl) || !Number.isInteger(d.id)) continue;
+      const at = stamp(d.deleted_at);
+      const cur = await db.prepare(`SELECT updated_at FROM ${d.tbl} WHERE id=?`).bind(d.id).first();
+      if (cur && cur.updated_at > at) continue; // alterado depois da exclusão: a alteração vale
+      if (cur) await db.prepare(`DELETE FROM ${d.tbl} WHERE id=?`).bind(d.id).run();
+      else {
+        await db.batch([db.prepare('UPDATE sync_meta SET rev=rev+1 WHERE id=1'),
+          db.prepare('INSERT OR REPLACE INTO tombstones VALUES (?,?,?,(SELECT rev FROM sync_meta WHERE id=1))').bind(d.tbl, d.id, at)]);
+      }
+    }
+    for (const c of list('counters')) {
+      if (typeof c.kind !== 'string' || !Number.isInteger(c.last_value)) continue;
+      await db.prepare('INSERT INTO counters VALUES (?,?) ON CONFLICT(kind) DO UPDATE SET last_value=max(last_value,excluded.last_value)')
+        .bind(c.kind, c.last_value).run();
+    }
+
+    // O cursor é lido antes das consultas: o que for gravado no meio volta na próxima vez (nada se perde).
+    const cursor = (await db.prepare('SELECT rev FROM sync_meta WHERE id=1').first()).rev;
+    const q = async (sql) => (await db.prepare(sql).bind(since).all()).results;
+    return {
+      cursor, renamed,
+      records: await q('SELECT id,kind,code,name,due,status,payload,updated_at FROM records WHERE rev>? ORDER BY id'),
+      tasks: await q('SELECT id,project_id,title,due,status,updated_at FROM tasks WHERE rev>? ORDER BY id'),
+      settings: await q('SELECT key,value,updated_at FROM settings WHERE rev>?'),
+      deleted: await q('SELECT tbl,id,deleted_at FROM tombstones WHERE rev>?'),
+      counters: (await db.prepare('SELECT kind,last_value FROM counters').all()).results,
+    };
   }
 }

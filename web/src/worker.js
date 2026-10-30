@@ -134,6 +134,27 @@ async function api(request, env, path) {
   return json({ erro: 'Rota não encontrada.' }, 404);
 }
 
+// Sincronização do app desktop: autenticada por token (ERP_SYNC_TOKEN), não pelo login do navegador.
+async function sincronizar(request, env) {
+  if (!env.ERP_SYNC_TOKEN || env.ERP_SYNC_TOKEN.length < 24) {
+    return json({ erro: 'Sincronização desligada: crie o segredo ERP_SYNC_TOKEN (mínimo 24 caracteres) no Cloudflare.' }, 503);
+  }
+  const auth = request.headers.get('Authorization') || '';
+  if (!(await iguais(auth, `Bearer ${env.ERP_SYNC_TOKEN}`))) {
+    await new Promise((r) => setTimeout(r, 800));
+    return json({ erro: 'Token de sincronização inválido.' }, 401);
+  }
+  if (request.method !== 'POST') return json({ erro: 'Método não permitido.' }, 405);
+  if (!env.DB) return json({ erro: 'Banco D1 ainda não ligado (binding DB).' }, 503);
+  try {
+    return json(await new Store(env.DB).sync(await corpo(request)));
+  } catch (e) {
+    if (e instanceof UserError || e instanceof SyntaxError) return json({ erro: e.message }, 400);
+    console.error(e);
+    return json({ erro: 'Erro interno ao sincronizar.' }, 500);
+  }
+}
+
 export default {
   async fetch(request, env) {
     // Sem usuário/senha configurados, nada é servido (falha fechada).
@@ -157,6 +178,7 @@ export default {
         ? new Response(null, { status: 303, headers: { Location: '/' } })
         : paginaLogin();
     }
+    if (url.pathname === '/api/sync') return sincronizar(request, env);
     if (url.pathname === '/logo.png' || url.pathname === '/icon.png') return env.ASSETS.fetch(request);
     if (url.pathname === '/sair') {
       return new Response(null, { status: 303, headers: { Location: '/login', 'Set-Cookie': `${COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax` } });
