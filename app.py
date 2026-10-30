@@ -15,6 +15,7 @@ from tkinter import font as tkfont
 from backup import Backup
 from core import (DEFAULT_RATES, Store, add_product_cost, amount, data_dir, display_date,
                   electronic_quote, energy_cost, iso_date, money, number, print_quote)
+from sync import SyncConfig, synchronize
 from updater import check_and_stage, launch_cached, read_config
 
 BG, PANEL, DARK, GREEN, MINT, INK = '#edf5f1', '#ffffff', '#153b36', '#228659', '#d9f3dc', '#183831'
@@ -192,7 +193,9 @@ class ERP:
     def __init__(self, root):
         self.root = root
         self.folder = data_dir()
-        self.store = Store(self.folder / 'senembi.db')
+        self.sync_config = SyncConfig.load(self.folder)
+        self.syncing = False
+        self.store = Store(self.folder / 'senembi.db', self.sync_config.device)
         self.backup = Backup(self.folder)
         self.current = 'filaments'
         self.month = date.today().replace(day=1)
@@ -233,6 +236,7 @@ class ERP:
         root.protocol('WM_DELETE_WINDOW', self.close)
         root.after(1200, self.start_update)
         root.after(120000, self.daily_backup)
+        root.after(3000, self.auto_sync)
 
     def shell(self):
         header = tk.Frame(self.root, bg=DARK, height=110)
@@ -248,6 +252,8 @@ class ERP:
                  fg=MINT, font=('Segoe UI', 15)).pack(side='left')
         ActionButton(header, 'Pasta de backup', self.select_backup, 'secondary', DARK).pack(
             side='right', padx=18)
+        ActionButton(header, 'Configurar web', self.sync_settings, 'secondary', DARK).pack(side='right')
+        ActionButton(header, 'Sincronizar', self.sync_now, 'primary', DARK).pack(side='right', padx=(0, 9))
         self.sidebar = tk.Frame(self.root, bg=DARK, width=230)
         self.sidebar.pack(side='left', fill='y')
         self.sidebar.pack_propagate(False)
@@ -738,6 +744,44 @@ class ERP:
                 tree.insert('', 'end', iid=str(i), values=(display_date(event['date']), event['source'],
                             event['description'], event['status']))
 
+    def sync_settings(self):
+        d = Dialog(self, 'Sincronização com o ERP web', height=560)
+        cfg = self.sync_config
+        form_note(d.content, 'Endereço do ERP no Cloudflare (ex.: https://erp-senembi.SEU-USUARIO.workers.dev) e o token '
+                  'criado no segredo ERP_SYNC_TOKEN do Worker. Alterações feitas aqui e na web são trocadas ao abrir, '
+                  'a cada 5 minutos, ao fechar e pelo botão Sincronizar; se o mesmo item mudar nos dois lados, '
+                  'vale a alteração mais recente.')
+        url = entry(d.content, 'Endereço do ERP web', cfg.url, span=2)
+        token = entry(d.content, 'Token de sincronização', cfg.token, span=2)
+        device = entry(d.content, 'Número deste computador (1 a 15; diferente em cada PC)', cfg.device)
+        def save():
+            new = SyncConfig(url.get(), token.get(), int(number(device.get(), 'Número do computador', minimum=1)))
+            if new.device != cfg.device and self.store.db.execute('SELECT 1 FROM sync_state WHERE cursor>0').fetchone():
+                raise ValueError('Este computador já sincronizou; mantenha o mesmo número.')
+            new.save(self.folder)
+            self.sync_config = new
+            self.store.device = new.device
+            self.root.after(200, self.sync_now)
+        d.save_button(save)
+
+    def sync_now(self, quiet=False):
+        if not self.sync_config.ready:
+            if not quiet: self.sync_settings()
+            return
+        if self.syncing or self.closing: return
+        self.syncing = True
+        self.status.set('Sincronizando com o ERP web…')
+        config = self.sync_config
+        def work():
+            try: self.events.put(('sync', synchronize(self.store.path, config)))
+            except Exception as exc: self.events.put(('sync_error', str(exc)))
+        threading.Thread(target=work, daemon=True).start()
+
+    def auto_sync(self):
+        if self.closing: return
+        self.sync_now(quiet=True)
+        self.root.after(300000, self.auto_sync)
+
     def select_backup(self):
         folder = filedialog.askdirectory(title='Escolha a pasta para backups automáticos')
         if folder:
@@ -774,6 +818,15 @@ class ERP:
                 if kind == 'backup':
                     self.status.set('Backup concluído' if not message.selected_error else
                                     'Backup local salvo; pasta escolhida indisponível')
+                elif kind == 'sync':
+                    self.syncing = False
+                    renamed = ''.join(f' {x["from"]}→{x["to"]}' for x in message.renamed)
+                    self.status.set(f'Sincronizado: {message.sent} enviados, {message.received} recebidos.'
+                                    + (f' Códigos ajustados:{renamed}' if renamed else ''))
+                    if message.received or message.renamed: self.render()
+                elif kind == 'sync_error':
+                    self.syncing = False
+                    self.status.set('Sincronização: ' + message)
                 elif kind == 'update':
                     self.status.set(f'Versão {message} pronta. Reinicie para atualizar.')
                 else: self.status.set(message)
@@ -789,11 +842,15 @@ class ERP:
         dialog.geometry('370x140')
         dialog.transient(self.root)
         dialog.protocol('WM_DELETE_WINDOW', lambda: None)
-        ttk.Label(dialog, text='Backup sendo realizado', font=('Segoe UI', 14, 'bold')).pack(pady=(22, 10))
+        ttk.Label(dialog, text='Sincronizando e fazendo backup' if self.sync_config.ready else 'Backup sendo realizado',
+                  font=('Segoe UI', 14, 'bold')).pack(pady=(22, 10))
         ttk.Progressbar(dialog, mode='indeterminate').pack(fill='x', padx=35, pady=10)
         dialog.grab_set()
         done = queue.Queue()
         def work():
+            if self.sync_config.ready:
+                try: synchronize(self.store.path, self.sync_config, timeout=10)
+                except Exception: pass  # sem internet: as alterações seguem marcadas para a próxima vez
             try: done.put(self.backup.create(self.store.path))
             except Exception as exc: done.put(exc)
         threading.Thread(target=work, daemon=True).start()

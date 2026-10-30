@@ -26,6 +26,10 @@ DEFAULT_SETTINGS = {'kwh': 1.0, 'printer_w': 350, 'profit': 30,
                     'modeling_hour': 100, 'electronics_hour': 120, 'technical_hour': 120}
 PREFIXES = {'components': 'ELE', 'products': 'PRD',
             'orders': 'OP', 'projects': 'PRO'}
+# IDs separados por dispositivo (id % 16): 0 = versão web, 1–15 = computadores com este app.
+# Assim registros criados na web e no desktop nunca recebem o mesmo id ao sincronizar.
+ID_SLOTS = 16
+NOW_MS = "CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)"
 
 
 def filament_prefix(material, description):
@@ -128,7 +132,10 @@ def data_dir():
 
 
 class Store:
-    def __init__(self, path):
+    def __init__(self, path, device=1):
+        if not 1 <= int(device) < ID_SLOTS:
+            raise ValueError(f'Dispositivo deve estar entre 1 e {ID_SLOTS - 1}.')
+        self.device = int(device)
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.path)
@@ -147,7 +154,47 @@ class Store:
                 title TEXT NOT NULL, due TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'A fazer');
         ''')
         self.db.commit()
+        self._migrate_sync()
         self._migrate_filament_codes()
+
+    def _migrate_sync(self):
+        """Colunas e gatilhos que registram o que mudou desde a última sincronização."""
+        with self.db:
+            for table in ('records', 'tasks', 'settings'):
+                columns = {r[1] for r in self.db.execute(f'PRAGMA table_info({table})')}
+                if 'updated_at' not in columns:
+                    self.db.execute(f'ALTER TABLE {table} ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0')
+                if 'dirty' not in columns:
+                    # Dados que já existiam ainda não foram enviados: começam marcados e com a hora da
+                    # atualização do app, para que na primeira sincronização prevaleça o que está neste PC.
+                    self.db.execute(f'ALTER TABLE {table} ADD COLUMN dirty INTEGER NOT NULL DEFAULT 1')
+                    self.db.execute(f'UPDATE {table} SET updated_at = {NOW_MS} WHERE updated_at = 0')
+            self.db.executescript(f'''
+                CREATE TABLE IF NOT EXISTS deleted (tbl TEXT NOT NULL, id INTEGER NOT NULL,
+                    deleted_at INTEGER NOT NULL, dirty INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (tbl, id));
+                CREATE TABLE IF NOT EXISTS sync_state (id INTEGER PRIMARY KEY CHECK (id = 1),
+                    applying INTEGER NOT NULL DEFAULT 0, cursor INTEGER NOT NULL DEFAULT 0);
+                INSERT OR IGNORE INTO sync_state(id) VALUES (1);
+            ''')
+            local = '(SELECT applying FROM sync_state WHERE id = 1) = 0'
+            for table, key, fields in (('records', 'id', 'kind, code, name, due, status, payload'),
+                                       ('tasks', 'id', 'project_id, title, due, status'),
+                                       ('settings', 'key', 'value')):
+                mark = f'UPDATE {table} SET dirty = 1, updated_at = {NOW_MS} WHERE {key} = NEW.{key};'
+                self.db.execute(f'CREATE TRIGGER IF NOT EXISTS {table}_ins_sync AFTER INSERT ON {table} '
+                                f'WHEN {local} BEGIN {mark} END')
+                self.db.execute(f'CREATE TRIGGER IF NOT EXISTS {table}_upd_sync AFTER UPDATE OF {fields} '
+                                f'ON {table} WHEN {local} BEGIN {mark} END')
+                if table != 'settings':
+                    self.db.execute(f'CREATE TRIGGER IF NOT EXISTS {table}_del_sync AFTER DELETE ON {table} '
+                                    f"WHEN {local} BEGIN INSERT OR REPLACE INTO deleted VALUES "
+                                    f"('{table}', OLD.id, {NOW_MS}, 1); END")
+
+    def _next_id(self, table):
+        """Próximo id da faixa deste computador, sem reaproveitar ids excluídos."""
+        top = self.db.execute(f'SELECT max(coalesce((SELECT max(id) FROM {table}), 0), '
+                              f"coalesce((SELECT max(id) FROM deleted WHERE tbl='{table}'), 0))").fetchone()[0]
+        return (top // ID_SLOTS + 1) * ID_SLOTS + self.device
 
     def _update_filament_references(self, mapping):
         """Mantém as referências textuais dos orçamentos já cadastrados."""
@@ -214,7 +261,7 @@ class Store:
 
     def set_setting(self, key, value):
         with self.db:
-            self.db.execute('INSERT INTO settings VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+            self.db.execute('INSERT INTO settings(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                             (key, json.dumps(value, ensure_ascii=False)))
 
     def all(self, kind):
@@ -228,6 +275,8 @@ class Store:
     @staticmethod
     def _unpack(row):
         result = dict(row)
+        for column in ('updated_at', 'dirty'):
+            result.pop(column, None)
         result.update(json.loads(result.pop('payload')))
         return result
 
@@ -244,8 +293,9 @@ class Store:
                 self.db.execute('INSERT INTO counters VALUES (?,?) ON CONFLICT(kind) DO UPDATE SET last_value=excluded.last_value',
                                 (kind, count))
                 code = f'{prefix}-{count:05d}'
-                cur = self.db.execute('INSERT INTO records(kind,code,name,due,status,payload) VALUES (?,?,?,?,?,?)',
-                                      (kind, code, name.strip(), due, status, json.dumps(payload, ensure_ascii=False)))
+                cur = self.db.execute('INSERT INTO records(id,kind,code,name,due,status,payload) VALUES (?,?,?,?,?,?,?)',
+                                      (self._next_id('records'), kind, code, name.strip(), due, status,
+                                       json.dumps(payload, ensure_ascii=False)))
                 return cur.lastrowid
             old = self.get(id_)
             if not old or old['kind'] != kind:
@@ -271,8 +321,8 @@ class Store:
         if not self.get(project_id):
             raise ValueError('Projeto não encontrado.')
         with self.db:
-            self.db.execute('INSERT INTO tasks(project_id,title,due) VALUES (?,?,?)',
-                            (project_id, title.strip(), iso_date(due)))
+            self.db.execute('INSERT INTO tasks(id,project_id,title,due) VALUES (?,?,?,?)',
+                            (self._next_id('tasks'), project_id, title.strip(), iso_date(due)))
 
     def tasks(self, project_id=None):
         query = '''SELECT t.*,r.name AS project FROM tasks t JOIN records r ON r.id=t.project_id'''

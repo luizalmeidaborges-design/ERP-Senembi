@@ -8,6 +8,12 @@ Com Python 3.12 instalado, execute `python app.py`. No Windows, `build_windows.b
 
 **Correção do atualizador:** a versão 1.1.0 rejeita o endereço do manifesto antes de tentar baixar uma atualização. Após publicar a versão corrigida, computadores com 1.1.0 ou anterior precisam baixar e abrir o novo EXE manualmente uma vez. As atualizações posteriores poderão usar o atualizador automático. Use uma nova versão (por exemplo, `1.1.1`) no próximo **Run workflow**; o workflow substituirá a versão do arquivo de configuração durante a compilação.
 
+## Versão web (Cloudflare)
+
+A pasta [`web/`](web/README.md) contém a versão para navegador e celular: Cloudflare Worker + banco D1, com login, as mesmas fórmulas e importação do `senembi.db`. As instruções de publicação estão em `web/README.md`.
+
+Para sincronizar este app com a versão web, clique em **Configurar web** e informe o endereço, o token (`ERP_SYNC_TOKEN`) e o número deste computador. A partir daí, o app troca as alterações com a web ao abrir, a cada 5 minutos, ao fechar e pelo botão **Sincronizar**. Quando o mesmo item muda nos dois lados, vale a alteração mais recente. A configuração fica em `sync.json`, na pasta de dados, e não vai para o backup do banco.
+
 ## Campos e fórmulas
 
 - Filamento: `MATERIAL-DES-00001`, usando as três primeiras letras da descrição (por exemplo, `PLA-LAR-00002`). Ao abrir a nova versão, os códigos antigos são convertidos automaticamente, mantendo seus números e as referências nos produtos. O cadastro contém material, descrição, peso útil do carretel em gramas, valor total, densidade e fornecedor. A densidade é informação de catálogo; o orçamento utiliza o **peso informado pelo fatiador**.
