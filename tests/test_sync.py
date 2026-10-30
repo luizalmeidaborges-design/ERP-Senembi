@@ -92,6 +92,10 @@ class WorkerSyncTests(unittest.TestCase):
             self.assertEqual(state['tasks'][0]['title'], 'Planejar')
             self.assertEqual(state['settings']['kwh'], 0.9)
             self.assertEqual(synchronize(a.path, config).received, 0)
+            # O servidor guarda a hora da alteração feita no desktop (não a hora em que recebeu).
+            stamp = a.db.execute('SELECT updated_at FROM records WHERE id=?', (fil,)).fetchone()[0]
+            self.assertEqual(json.loads(json.dumps(stamp)), stamp)
+            self.assertEqual(web.call('/api/exportar')['records'][0]['updated_at'], stamp)
 
             # 2) web → desktop, com o mesmo código criado dos dois lados (OP-00001)
             comp = web.call('/api/registros/components', 'POST', {'name': 'ESP32', 'quantity': 5, 'package_value': 150})['id']
