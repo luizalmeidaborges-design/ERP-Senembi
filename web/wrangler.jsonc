@@ -1,0 +1,17 @@
+{
+  "name": "erp-senembi",
+  "main": "src/worker.js",
+  "compatibility_date": "2025-09-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  // Banco do ERP (mesmo esquema do senembi.db do app desktop).
+  "d1_databases": [
+    { "binding": "DB", "database_name": "erp-senembi", "database_id": "b3dbcd65-d720-429d-a919-a1fd2e3dcf8e", "migrations_dir": "migrations" }
+  ],
+  // Mantém as variáveis e segredos criados no painel do Cloudflare a cada deploy.
+  "keep_vars": true,
+  "observability": { "enabled": true }
+}
