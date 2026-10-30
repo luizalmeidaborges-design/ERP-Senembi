@@ -165,8 +165,10 @@ class Store:
                 if 'updated_at' not in columns:
                     self.db.execute(f'ALTER TABLE {table} ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0')
                 if 'dirty' not in columns:
-                    # Dados que já existiam ainda não foram enviados: começam marcados.
+                    # Dados que já existiam ainda não foram enviados: começam marcados e com a hora da
+                    # atualização do app, para que na primeira sincronização prevaleça o que está neste PC.
                     self.db.execute(f'ALTER TABLE {table} ADD COLUMN dirty INTEGER NOT NULL DEFAULT 1')
+                    self.db.execute(f'UPDATE {table} SET updated_at = {NOW_MS} WHERE updated_at = 0')
             self.db.executescript(f'''
                 CREATE TABLE IF NOT EXISTS deleted (tbl TEXT NOT NULL, id INTEGER NOT NULL,
                     deleted_at INTEGER NOT NULL, dirty INTEGER NOT NULL DEFAULT 1, PRIMARY KEY (tbl, id));
