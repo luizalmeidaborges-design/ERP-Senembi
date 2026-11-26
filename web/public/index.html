@@ -13,7 +13,6 @@
 </head>
 <body>
 <header class="top">
-  <button class="menu" id="menu" aria-label="Abrir menu" aria-expanded="false">☰</button>
   <img src="/logo.png" alt="Senembi T-Labs" class="logo">
   <span class="tagline">ERP · Laboratório de projetos mecatrônicos</span>
   <a class="sair" href="/sair">Sair</a>
@@ -22,6 +21,9 @@
   <nav class="side" id="nav" aria-label="Páginas"></nav>
   <main id="main" tabindex="-1"><p class="muted">Carregando…</p></main>
 </div>
+<div class="sheet-bg" id="sheet-bg" hidden></div>
+<nav class="sheet" id="sheet" aria-label="Mais páginas" hidden></nav>
+<nav class="tabbar" id="tabbar" aria-label="Navegação"></nav>
 <dialog id="dlg"><form method="dialog" id="dlg-form" novalidate></form></dialog>
 <div id="toast" role="status" aria-live="polite"></div>
 <script type="module" src="/app.js"></script>

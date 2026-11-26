@@ -457,6 +457,7 @@ const title = (k) => PAGES.find(([key]) => key === k)[1];
 function render() {
   const nav = document.getElementById('nav');
   nav.replaceChildren(...PAGES.map(([k, t]) => h('a', { href: '#' + k, 'aria-current': k === page ? 'page' : null }, t)));
+  renderTabbar();
   const main = document.getElementById('main');
   main.replaceChildren();
   if (!state) return;
@@ -467,15 +468,42 @@ function render() {
   document.title = `${title(page)} · Senembi T-Labs | ERP`;
 }
 
+// ---------- barra inferior (celular) ----------
+const ICONS = {
+  filaments: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2.5"/><path d="M12 3.5v3M12 17.5v3M3.5 12h3M17.5 12h3"/>',
+  products: '<path d="M12 3 20 7.5v9L12 21l-8-4.5v-9z"/><path d="m4 7.5 8 4.5 8-4.5M12 12v9"/>',
+  orders: '<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/>',
+  pending: '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="m8 12 3 3 5-6"/>',
+  more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
+  components: '<rect x="7" y="7" width="10" height="10" rx="1.5"/><path d="M10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4"/>',
+  projects: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  calendar: '<rect x="3.5" y="5" width="17" height="15" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/>',
+  settings: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r=".9"/>',
+};
+const TAB_MAIN = [['filaments', 'Filamentos'], ['products', 'Produtos'], ['orders', 'Pedidos'], ['pending', 'Tarefas']];
+const TAB_MORE = ['components', 'projects', 'calendar', 'settings'];
+const icon = (k) => { const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg'); s.setAttribute('viewBox', '0 0 24 24'); s.setAttribute('aria-hidden', 'true'); s.innerHTML = ICONS[k]; return s; };
+
+function renderTabbar() {
+  const inMore = TAB_MORE.includes(page);
+  const item = (k, label, extra = {}) => h(extra.button ? 'button' : 'a', { class: 'tab', ...(extra.button ? { type: 'button', onclick: toggleSheet, 'aria-expanded': String(!document.getElementById('sheet').hidden), 'aria-current': inMore ? 'page' : null } : { href: '#' + k, 'aria-current': k === page ? 'page' : null }) },
+    h('span', { class: 'pill' }, icon(k)), h('span', { class: 'lbl' }, label));
+  document.getElementById('tabbar').replaceChildren(...TAB_MAIN.map(([k, t]) => item(k, t)), item('more', 'Mais', { button: true }));
+  document.getElementById('sheet').replaceChildren(...TAB_MORE.map((k) => h('a', { href: '#' + k, 'aria-current': k === page ? 'page' : null }, h('span', { class: 'pill' }, icon(k)), title(k))));
+}
+function toggleSheet(open) {
+  const sheet = document.getElementById('sheet');
+  const show = typeof open === 'boolean' ? open : sheet.hidden;
+  sheet.hidden = !show; document.getElementById('sheet-bg').hidden = !show;
+  document.querySelector('.tabbar button.tab')?.setAttribute('aria-expanded', String(show));
+}
+document.getElementById('sheet-bg').addEventListener('click', () => toggleSheet(false));
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') toggleSheet(false); });
+
 window.addEventListener('hashchange', () => {
   const k = location.hash.slice(1);
-  if (PAGES.some(([key]) => key === k)) { page = k; render(); }
-  document.getElementById('nav').classList.remove('open');
-  document.getElementById('menu').setAttribute('aria-expanded', 'false');
-});
-document.getElementById('menu').addEventListener('click', (e) => {
-  const open = document.getElementById('nav').classList.toggle('open');
-  e.currentTarget.setAttribute('aria-expanded', String(open));
+  toggleSheet(false);
+  if (PAGES.some(([key]) => key === k)) { page = k; render(); window.scrollTo(0, 0); }
 });
 
 render();
