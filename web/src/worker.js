@@ -42,12 +42,20 @@ async function novaSessao(env) {
   return `${COOKIE}=${exp}.${await hmac(env, exp)}; Path=/; Max-Age=${DIAS * 86400}; HttpOnly; Secure; SameSite=Lax`;
 }
 
+const ARQUIVOS_PUBLICOS = new Set([
+  '/logo.png', '/icon.png', '/favicon.ico', '/favicon-32.png', '/apple-touch-icon.png',
+  '/apple-touch-icon-precomposed.png', '/icon-192.png', '/icon-512.png', '/manifest.webmanifest',
+]);
+
 function paginaLogin(erro = '') {
   return new Response(`<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex"><title>Senembi T-Labs | ERP</title>
-<link rel="icon" href="/icon.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="apple-mobile-web-app-title" content="ERP Senembi">
 <style>
 :root{--bg:#edf5f1;--card:#fff;--text:#183831;--muted:#60776b;--line:#cddfd3;--accent:#228659;--bad:#963d35;color-scheme:light}
 @media (prefers-color-scheme:dark){:root{--bg:#0e1a17;--card:#152521;--text:#e3efe9;--muted:#9bb5a8;--line:#29413a;--accent:#4cc38a;--bad:#f0a49a;color-scheme:dark}}
@@ -179,7 +187,8 @@ export default {
         : paginaLogin();
     }
     if (url.pathname === '/api/sync') return sincronizar(request, env);
-    if (url.pathname === '/logo.png' || url.pathname === '/icon.png') return env.ASSETS.fetch(request);
+    // Ícones e manifest ficam sem login: o iOS busca o apple-touch-icon sem cookie.
+    if (ARQUIVOS_PUBLICOS.has(url.pathname)) return env.ASSETS.fetch(request);
     if (url.pathname === '/sair') {
       return new Response(null, { status: 303, headers: { Location: '/login', 'Set-Cookie': `${COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax` } });
     }
